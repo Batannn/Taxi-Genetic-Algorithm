@@ -30,11 +30,11 @@ def evaluate_solution(solution, seeds):
         visited = {(taxi_row, taxi_col)}
 
         while not done and not truncated and steps < 200:
-            # ── Core lookup-table policy (your project description) ──
+            # core lookup-table policy
             action = int(solution[state])
             action = max(0, min(5, action))
 
-            # Safety overrides (keep the taxi from getting permanently stuck)
+            # safety overrides (keep the taxi from getting permanently stuck)
             if action < 4 and info["action_mask"][action] == 0:
                 ep_reward -= 10
                 valids = [a for a in range(4) if info["action_mask"][a] == 1]
@@ -100,9 +100,9 @@ def fitness_func(ga_instance, solution, solution_idx):
     return evaluate_solution(solution, TRAIN_SEEDS)
 
 
-# Experience method
-# Run random rollouts; wherever a good action is observed for a state, record it.
-# This gives the initial population a head start over pure random initialization.
+# experience method
+# run random rollouts: wherever a good action is observed for a state, record it.
+# this gives the initial population a head start over pure random initialization.
 
 def collect_experience(n_episodes=2000):
     env = gym.make("Taxi-v4")
