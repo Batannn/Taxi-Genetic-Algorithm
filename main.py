@@ -1,16 +1,3 @@
-"""
-Taxi-v4 Genetic Algorithm — 500-Gene Lookup Table v5
-=====================================================
-Fixes vs v4:
-  1. Hard-seed weighting: seeds that historically fail get 3x weight in fitness
-     so the GA can't hide behind one lucky seed carrying the average.
-  2. Diversity watchdog: if the top-5 fitness scores in an island differ by
-     less than 1.0, inject fresh random chromosomes into the bottom 40%.
-     This breaks out of local optima instead of spinning in place.
-  3. Migration reduced to 2 migrants every other epoch — was homogenizing
-     all islands into the same local optimum by epoch 3.
-  4. Epochs raised to 8, gens per epoch raised to 150 for more search time.
-"""
 
 import gymnasium as gym
 import numpy as np
@@ -34,9 +21,47 @@ def append_log(epoch, island_id, gen, fitness):
         csv.writer(f).writerow([epoch, island_id, gen, round(fitness, 2)])
 
 
-# ── Episode runner ─────────────────────────────────────────────────────────
+CURRENT_EPOCH = 1
 
-def run_episode(solution, env, seed, already_picked_up=False):
+
+def get_curriculum(epoch):
+    """Return penalty/reward magnitudes based on current training phase."""
+    if epoch <= 2:
+        return dict(
+            wall_pen=0,  # no punishment for hitting walls
+            revisit_pen=0,  # no punishment for circling
+            backtrack_pen=0,  # no punishment for going back
+            closer_bonus=2,  # tiny nudge toward target
+            farther_pen=0,  # no punishment for moving away
+            pickup_bonus=200,  # HUGE reward for finding passenger
+            dropoff_bonus=500,  # HUGE reward for delivery
+            speed_bonus=0,  # no speed pressure yet
+        )
+    elif epoch <= 4:
+        return dict(
+            wall_pen=-5,
+            revisit_pen=-3,
+            backtrack_pen=-3,
+            closer_bonus=3,
+            farther_pen=-1,
+            pickup_bonus=150,
+            dropoff_bonus=400,
+            speed_bonus=0,
+        )
+    else:
+        return dict(
+            wall_pen=-10,
+            revisit_pen=-5,
+            backtrack_pen=-5,
+            closer_bonus=3,
+            farther_pen=-1,
+            pickup_bonus=100,
+            dropoff_bonus=300,
+            speed_bonus=100,  # bonus for finishing fast
+        )
+#Episode runner
+def run_episode(solution, env, seed, epoch, already_picked_up=False):
+    c = get_curriculum(epoch)
     state, info = env.reset(seed=seed)
     taxi_row, taxi_col, pass_idx, dest_idx = env.unwrapped.decode(state)
 
@@ -50,6 +75,7 @@ def run_episode(solution, env, seed, already_picked_up=False):
         info["action_mask"] = env.unwrapped.action_mask(forced_state)
 
     ep_reward   = 0.0
+    raw_reward  = 0.0
     done        = truncated = False
     last_action = -1
     steps       = 0
@@ -67,12 +93,12 @@ def run_episode(solution, env, seed, already_picked_up=False):
         action = max(0, min(5, action))
 
         if action < 4 and info["action_mask"][action] == 0:
-            ep_reward -= 10
+            ep_reward +=c["wall_pen"]
             valids = [a for a in range(4) if info["action_mask"][a] == 1]
             if valids:
                 action = int(np.random.choice(valids))
         elif action < 4 and action == OPPOSITES.get(last_action, -1):
-            ep_reward -= 5
+            ep_reward += c["backtrack_pen"]
             valids = [a for a in range(4)
                       if info["action_mask"][a] == 1
                       and a != OPPOSITES.get(last_action, -1)]
@@ -84,7 +110,7 @@ def run_episode(solution, env, seed, already_picked_up=False):
 
         if action < 4:
             if (nr, nc) in visited:
-                ep_reward -= 5
+                ep_reward += c["revisit_pen"]
             else:
                 visited.add((nr, nc))
 
@@ -95,46 +121,46 @@ def run_episode(solution, env, seed, already_picked_up=False):
 
         new_dist = abs(nr - target[0]) + abs(nc - target[1])
         if new_dist < closest_dist:
-            ep_reward   += 3
+            ep_reward   += c["closer_bonus"]
             closest_dist = new_dist
         elif new_dist > closest_dist:
-            ep_reward   -= 1
+            ep_reward   +=c["farther_pen"]
 
         if np_idx == 4 and not picked_up:
-            ep_reward   += 60
+            ep_reward   += c["pickup_bonus"]
             picked_up    = True
             closest_dist = abs(nr - ZONE_COORDS[nd_idx][0]) + abs(nc - ZONE_COORDS[nd_idx][1])
             visited.clear()
             visited.add((nr, nc))
 
         ep_reward  += reward
+        raw_reward += reward
         last_action = action
         state       = next_state
         steps      += 1
 
     if done and reward == 20:
-        ep_reward += 100 + max(0, 200 - steps)
+        ep_reward += c["dropoff_bonus"] + c["speed_bonus"] * max(0, 200 - steps) / 200
 
-    return ep_reward, steps, picked_up, (done and reward == 20)
+    return ep_reward,raw_reward, steps, picked_up, (done and reward == 20)
 
 
-# ── Fitness: per-seed weights so one easy seed can't carry the average ─────
 # Seeds are weighted by difficulty — harder seeds count more.
 # Weights are updated automatically after each epoch based on pass/fail history.
 
 TRAIN_SEEDS   = [42, 105, 999, 7, 256, 13, 77, 512]
-# Start equal; will be adjusted dynamically
+#Start
 SEED_WEIGHTS  = {s: 1.0 for s in TRAIN_SEEDS}
 
-def evaluate_solution(solution, seeds):
+def evaluate_solution(solution, seeds, epoch):
     env   = gym.make("Taxi-v4")
     total = 0.0
     weight_sum = 0.0
 
     for seed in seeds:
         w = SEED_WEIGHTS[seed]
-        score_a, _, _, _ = run_episode(solution, env, seed, already_picked_up=False)
-        score_b, _, _, _ = run_episode(solution, env, seed, already_picked_up=True)
+        score_a, _, _, _, _ = run_episode(solution, env, seed, epoch, already_picked_up=False)
+        score_b, _, _, _, _ = run_episode(solution, env, seed, epoch, already_picked_up=True)
         total      += w * (score_a + 0.4 * score_b)
         weight_sum += w
 
@@ -143,7 +169,7 @@ def evaluate_solution(solution, seeds):
 
 
 def fitness_func(ga_instance, solution, solution_idx):
-    return evaluate_solution(solution, TRAIN_SEEDS)
+    return evaluate_solution(solution, TRAIN_SEEDS, CURRENT_EPOCH)
 
 
 def update_seed_weights(best_solution):
@@ -153,7 +179,7 @@ def update_seed_weights(best_solution):
     """
     env = gym.make("Taxi-v4")
     for seed in TRAIN_SEEDS:
-        _, _, picked_up, delivered = run_episode(best_solution, env, seed)
+        _, _, _, picked_up, delivered = run_episode(best_solution, env, seed, CURRENT_EPOCH)
         if not picked_up:
             SEED_WEIGHTS[seed] = min(SEED_WEIGHTS[seed] * 1.5, 6.0)  # cap at 6x
         elif not delivered:
@@ -166,14 +192,9 @@ def update_seed_weights(best_solution):
     print(f"  Seed weights updated: {w_str}")
 
 
-# ── Diversity watchdog ─────────────────────────────────────────────────────
-
+#Diversity check
 def inject_diversity(ga, fraction=0.4):
-    """
-    If the top-5 fitnesses in the island are nearly identical (< 1.0 spread),
-    the population has converged. Replace the bottom `fraction` with fresh
-    random chromosomes to break out of the local optimum.
-    """
+
     cached = ga.last_generation_fitness
     if cached is None:
         return False
@@ -193,17 +214,19 @@ def inject_diversity(ga, fraction=0.4):
     return True   # diversity was injected
 
 
-# ── Terminal quick-test ────────────────────────────────────────────────────
+#Terminal quick-test
 
 def terminal_test(solution, epoch):
     env = gym.make("Taxi-v4")
     print(f"\n  ┌─ Epoch {epoch} quick-test ───────────────────────────────")
+    print(f"  │  {'seed':<6}  {'raw score':>10}  {'steps':<6}  result")
+    print(f"  │  {'':─<6}  {'':─>10}  {'':─<6}  {'':─<12}")
     pickups = deliveries = 0
     for seed in [42, 105, 999, 7, 256]:
-        score, steps, picked_up, delivered = run_episode(solution, env, seed)
+        _, raw, steps, picked_up, delivered = run_episode(solution, env, seed, epoch)
         w      = SEED_WEIGHTS[seed]
         status = "✓ DELIVERED" if delivered else ("↑ PICKED UP" if picked_up else "✗ no pickup")
-        print(f"  │  seed={seed:<4} w={w:.1f}x  score={score:>8.1f}  steps={steps:<4}  {status}")
+        print(f"  │  {seed:<6}  {raw:>10.1f}  {steps:<6}  {status}")
         if picked_up:   pickups    += 1
         if delivered:   deliveries += 1
     print(f"  │  Pickups: {pickups}/5   Deliveries: {deliveries}/5")
@@ -211,7 +234,7 @@ def terminal_test(solution, epoch):
     env.close()
 
 
-# ── Experience collection ──────────────────────────────────────────────────
+#Experience collection
 
 def collect_experience(n_episodes=3000):
     env        = gym.make("Taxi-v4")
@@ -269,13 +292,11 @@ def build_seeded_population(pop_size, good_moves):
     return population
 
 
-# ── Island runner ──────────────────────────────────────────────────────────
-
 def run_island(island_id, initial_population, generations_per_epoch, epoch):
     log_buffer = []
 
     def _fitness(ga_inst, sol, sol_idx):
-        return evaluate_solution(sol, TRAIN_SEEDS)
+        return evaluate_solution(sol, TRAIN_SEEDS, epoch)
 
     def _on_gen(ga_inst):
         g   = ga_inst.generations_completed
@@ -313,7 +334,6 @@ def run_island(island_id, initial_population, generations_per_epoch, epoch):
 
 
 def migrate(islands, n_migrants=2):
-    """Reduced to 2 migrants — was too homogenizing at 5."""
     elites = []
     for ga in islands:
         sol, fit, _ = ga.best_solution()
@@ -333,20 +353,23 @@ def migrate(islands, n_migrants=2):
         ga.population = pop
 
 
-# ── Main ───────────────────────────────────────────────────────────────────
+#Main
 
 if __name__ == "__main__":
+
     N_ISLANDS      = 4
     POP_PER_ISLAND = 100
     EPOCHS         = 5
     GENS_PER_EPOCH = 100
-
     print("=" * 60)
     print("Taxi-v4  —  Evolutionary Lookup Table (500 genes) v5")
     print(f"  Islands      : {N_ISLANDS}")
     print(f"  Pop/island   : {POP_PER_ISLAND}  (total {N_ISLANDS * POP_PER_ISLAND})")
     print(f"  Epochs       : {EPOCHS}  x  {GENS_PER_EPOCH} generations")
     print(f"  Fitness log  : {FITNESS_LOG}")
+    print(f"  Epochs 1-2 : free exploration, no penalties")
+    print(f"  Epochs 3-4 : mild guidance introduced")
+    print(f"  Epochs 5+  : full penalties + speed pressure")
     print("=" * 60)
 
     init_log()
@@ -363,10 +386,13 @@ if __name__ == "__main__":
 
     print("\n[3/3] Running island model GA...\n")
     best_ever     = -1e9
+    best_ever_raw = -1e9
+    best_deliveries = 0
     best_solution = None
     islands       = []
 
     for epoch in range(1, EPOCHS + 1):
+        CURRENT_EPOCH = epoch
         print(f"── Epoch {epoch} / {EPOCHS} ──────────────────────────────")
 
         if epoch == 1:
@@ -393,15 +419,27 @@ if __name__ == "__main__":
                 epoch_best_fit = fit
                 epoch_best_sol = sol.copy()
 
-        if epoch_best_fit > best_ever:
-            best_ever     = epoch_best_fit
+        env_check = gym.make("Taxi-v4")
+        epoch_deliveries = 0
+        epoch_raw_total = 0.0
+        for seed in TRAIN_SEEDS:
+            _, raw, _, _, delivered = run_episode(epoch_best_sol, env_check, seed, epoch)
+            epoch_raw_total += raw
+            if delivered: epoch_deliveries += 1
+        env_check.close()
+        epoch_raw_avg = epoch_raw_total / len(TRAIN_SEEDS)
+
+        # Save if better deliveries, or same deliveries but better raw score
+        if (epoch_deliveries > best_deliveries or
+                (epoch_deliveries == best_deliveries and epoch_raw_avg > best_ever_raw)):
+            best_deliveries = epoch_deliveries
+            best_ever_raw = epoch_raw_avg
+            best_ever = epoch_best_fit
             best_solution = epoch_best_sol.copy()
             np.save("best_taxi_policy.npy", best_solution)
 
-        # Quick test + seed weight update
         terminal_test(epoch_best_sol, epoch)
-        update_seed_weights(epoch_best_sol)
-        print(f"  All-time best fitness so far: {best_ever:.2f}\n")
+        print(f"  Best so far: {best_deliveries}/8 seeds delivered  |  raw avg: {best_ever_raw:.1f}\n")
 
         # Migrate only on even epochs to avoid premature homogenization
         if epoch < EPOCHS and epoch % 2 == 0:
@@ -412,7 +450,7 @@ if __name__ == "__main__":
     print(f"Policy saved to best_taxi_policy.npy")
     print(f"Fitness log saved to {FITNESS_LOG}")
 
-    # ── Full GUI test run ──────────────────────────────────────────────────
+    #Test run: BROKEN
     print("\n--- Full Test Run with GUI (seed=42) ---")
     test_env = gym.make("Taxi-v4", render_mode="human")
     state, info = test_env.reset(seed=42)
