@@ -37,13 +37,13 @@ python main.py
 <summary><b>Click to expand the Distributed Evolutionary Architecture Flowchart</b></summary>
    
 ```mermaid    
-    flowchart TD
+   flowchart TD
     Start([Start]) --> Init[Initialize constants:<br/>NUM_STATES=500, NUM_ACTIONS=6<br/>ZONE_COORDS, OPPOSITES, seed weights]
     Init --> InitLog[Initialize fitness_log.csv]
     InitLog --> CollectExp[Collect Experience:<br/>3000 random rollouts<br/>record state→action pairs<br/>that led to pickup]
     CollectExp --> SeedPop[Build seeded initial populations<br/>for 4 islands<br/>50% seeded with good moves, 50% random]
 
-    SeedPop --> EpochLoop{For each epoch<br/>1:EPOCHS}
+    SeedPop --> EpochLoop{For each epoch<br/>1 to EPOCHS}
 
     EpochLoop -->|epoch = 1| RunIslandsFirst[Run all 4 islands<br/>from seeded population]
     EpochLoop -->|epoch > 1| DiversityCheck[Check population diversity<br/>per island]
@@ -104,13 +104,15 @@ python main.py
     %% ==========================================
     %% STYLING
     %% ==========================================
-    style Start fill:#90EE90,stroke:#333,stroke-width:2px
-    style GA fill:#87CEEB,stroke:#333,stroke-width:1px
-    style RunEp fill:#FFD700,stroke:#333,stroke-width:1px
-    style Evolve fill:#87CEEB,stroke:#333,stroke-width:1px
+    style Start fill:#90EE90,stroke:#333,stroke-width:2px,color:#000
+    
+    %% Changed from Blue/Yellow to High-Contrast Orange
+    style GA fill:#ffcc99,stroke:#e67300,stroke-width:2px,color:#000
+    style RunEp fill:#ffb366,stroke:#cc5200,stroke-width:2px,color:#000
+    style Evolve fill:#ffcc99,stroke:#e67300,stroke-width:2px,color:#000
     
     %% Highlighted End Sequence
-    style FinalTest fill:#ffcc99,stroke:#e67300,stroke-width:3px,color:#000
+    style FinalTest fill:#fce5cd,stroke:#e69138,stroke-width:3px,color:#000
     style End fill:#ff9999,stroke:#cc0000,stroke-width:4px,color:#000
 ```
 
