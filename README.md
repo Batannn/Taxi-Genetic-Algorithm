@@ -32,6 +32,90 @@ Instead of using a traditional Neural Network or Q-Learning, this project uses a
 *(Instructions on how to run the training script will be added here once development is complete)*
 python main.py
 
+## Flowchart
+<details>
+<summary><b>Click to expand the Distributed Evolutionary Architecture Flowchart</b></summary>
+   
+```mermaid    
+    flowchart TD
+    Start([Start]) --> Init[Initialize constants:<br/>NUM_STATES=500, NUM_ACTIONS=6<br/>ZONE_COORDS, OPPOSITES, seed weights]
+    Init --> InitLog[Initialize fitness_log.csv]
+    InitLog --> CollectExp[Collect Experience:<br/>3000 random rollouts<br/>record state→action pairs<br/>that led to pickup]
+    CollectExp --> SeedPop[Build seeded initial populations<br/>for 4 islands<br/>50% seeded with good moves, 50% random]
+
+    SeedPop --> EpochLoop{For each epoch<br/>1:EPOCHS}
+
+    EpochLoop -->|epoch = 1| RunIslandsFirst[Run all 4 islands<br/>from seeded population]
+    EpochLoop -->|epoch > 1| DiversityCheck[Check population diversity<br/>per island]
+
+    DiversityCheck --> ConvergedQ{Top-5 fitness<br/>spread < 1.0?}
+    ConvergedQ -->|Yes| InjectDiv[Replace bottom 40%<br/>with fresh random chromosomes]
+    ConvergedQ -->|No| RunIslandsCont[Run all 4 islands<br/>from previous population]
+    InjectDiv --> RunIslandsCont
+
+    RunIslandsFirst --> GA[PyGAD Genetic Algorithm<br/>150 generations per island]
+    RunIslandsCont --> GA
+
+    GA --> FitnessLoop{For each chromosome<br/>in population}
+    FitnessLoop --> GetCurr[Get curriculum for current epoch:<br/>epoch≤2: free explore<br/>epoch≤4: mild guidance<br/>epoch>4: full pressure]
+    GetCurr --> SeedSelect{epoch ≤ 2?}
+    SeedSelect -->|Yes| Use4[Use 4 seeds<br/>Phase A only]
+    SeedSelect -->|No| Use8[Use 8 seeds<br/>Phase A + Phase B]
+
+    Use4 --> RunEp[run_episode:<br/>simulate taxi navigation<br/>apply wall/revisit/backtrack penalties<br/>apply distance shaping<br/>apply pickup/dropoff bonuses]
+    Use8 --> RunEp
+
+    RunEp --> WeightedAvg[Weighted average across seeds<br/>using SEED_WEIGHTS]
+    WeightedAvg --> FitnessLoop
+    FitnessLoop -->|all chromosomes scored| Evolve[PyGAD evolves population:<br/>uniform crossover<br/>random mutation 25%<br/>roulette wheel selection<br/>keep top 1 elite]
+    Evolve --> GenDone{150 generations<br/>complete?}
+    GenDone -->|No| FitnessLoop
+    GenDone -->|Yes| IslandsComplete[All 4 islands<br/>finished this epoch]
+
+    IslandsComplete --> FindBest[Find best chromosome<br/>across all 4 islands]
+    FindBest --> RawEval[Re-evaluate best chromosome<br/>on all 8 seeds<br/>raw env reward, no shaping]
+    RawEval --> CompareQ{More deliveries than<br/>best-ever, or tie with<br/>better raw score?}
+    CompareQ -->|Yes| SaveBest[Save as best_taxi_policy.npy<br/>Update best_deliveries, best_ever_raw]
+    CompareQ -->|No| SkipSave[Keep previous best]
+    SaveBest --> QuickTest
+    SkipSave --> QuickTest[Terminal quick-test:<br/>print raw score per seed<br/>print pickups/deliveries count]
+
+    QuickTest --> UpdateWeights[update_seed_weights:<br/>failed seeds × 1.5<br/>partial seeds × 1.2<br/>solved seeds × 0.8]
+
+    UpdateWeights --> MigrateQ{epoch is even<br/>AND not last epoch?}
+    MigrateQ -->|Yes| Migrate[Migrate top 2 chromosomes<br/>between all islands<br/>replace worst performers]
+    MigrateQ -->|No| EpochLoop
+    Migrate --> EpochLoop
+
+    %% ==========================================
+    %% THE FIX: Forcing the End State to the Bottom
+    %% ==========================================
+
+    %% 1. Use a thick, elongated arrow for the main exit path
+    EpochLoop ====>|all epochs done| FinalTest[Full GUI test run<br/>on seed=42<br/>render taxi visually]
+
+    %% 2. Use invisible links from the bottom of the loop to force FinalTest downwards
+    Migrate ~~~~ FinalTest
+    MigrateQ ~~~~ FinalTest
+
+    %% 3. Thick arrow to the absolute end
+    FinalTest ===> End([End])
+
+    %% ==========================================
+    %% STYLING
+    %% ==========================================
+    style Start fill:#90EE90,stroke:#333,stroke-width:2px
+    style GA fill:#87CEEB,stroke:#333,stroke-width:1px
+    style RunEp fill:#FFD700,stroke:#333,stroke-width:1px
+    style Evolve fill:#87CEEB,stroke:#333,stroke-width:1px
+    
+    %% Highlighted End Sequence
+    style FinalTest fill:#ffcc99,stroke:#e67300,stroke-width:3px,color:#000
+    style End fill:#ff9999,stroke:#cc0000,stroke-width:4px,color:#000
+```
+
+</details>
+
 ## 📜 License
 This project is licensed under the MIT License - see the LICENSE file for details.
 
